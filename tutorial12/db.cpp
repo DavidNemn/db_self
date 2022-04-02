@@ -98,11 +98,6 @@ const uint32_t PAGE_SIZE = 4096;
 //    内部节点
 // 公共节点头：节点类型 + 是否根节点 + 指向其父节点的指针
 // COMMON_NODE_HEADER_SIZE = NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE
-// 叶子节点头：公共节点头 + 胞元数量
-// LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE
-// 叶节点体：胞元 = 关键词（id） + 值 （数据行）
-//      LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE
-
 
 
 /* 
@@ -116,6 +111,7 @@ const uint32_t PARENT_POINTER_SIZE = sizeof(uint32_t);
 const uint32_t PARENT_POINTER_OFFSET = IS_ROOT_OFFSET + IS_ROOT_SIZE;
 const uint8_t COMMON_NODE_HEADER_SIZE = NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE;
 
+// 公共节点头部分的取值
 class Node
 {
 protected:
@@ -149,17 +145,20 @@ public:
     {
         *((uint8_t *)((char *)node + IS_ROOT_OFFSET)) = is_root ? 1 : 0;
     }
+    
     uint32_t *node_parent()
     {
         return (uint32_t *)((char *)node + PARENT_POINTER_OFFSET);
     }
+    
     virtual uint32_t get_node_max_key();
 };
 
 /*
  * Leaf Node Header Layout
  */
-
+// 叶子节点头：公共节点头 + 胞元数量 + 下一个叶节点 
+// LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE + LEAF_NODE_NEXT_LEAF_SIZE
 const uint32_t LEAF_NODE_NUM_CELLS_SIZE = sizeof(uint32_t);
 const uint32_t LEAF_NODE_NUM_CELLS_OFFSET = COMMON_NODE_HEADER_SIZE;
 const uint32_t LEAF_NODE_NEXT_LEAF_SIZE = sizeof(uint32_t);
@@ -169,19 +168,22 @@ const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_C
 /*
  * Leaf Node Body Layout
  */
-
+// 叶节点体：胞元 = 关键词（id） + 值 （数据行）
+//      LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE
 const uint32_t LEAF_NODE_KEY_SIZE = sizeof(uint32_t);
 const uint32_t LEAF_NODE_KEY_OFFSET = 0;
 const uint32_t LEAF_NODE_VALUE_SIZE = ROW_SIZE;
-const uint32_t LEAF_NODE_VALUE_OFFSET =
-    LEAF_NODE_KEY_OFFSET + LEAF_NODE_KEY_SIZE;
+const uint32_t LEAF_NODE_VALUE_OFFSET = LEAF_NODE_KEY_OFFSET + LEAF_NODE_KEY_SIZE;
 const uint32_t LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE;
+
+// 页大小 - 叶节点头大小
 const uint32_t LEAF_NODE_SPACE_FOR_CELLS = PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
-const uint32_t LEAF_NODE_MAX_CELLS =
-    LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
+const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
+
+// 叶节点分裂
 const uint32_t LEAF_NODE_RIGHT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) / 2;
-const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT =
-    (LEAF_NODE_MAX_CELLS + 1) - LEAF_NODE_RIGHT_SPLIT_COUNT;
+const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) - LEAF_NODE_RIGHT_SPLIT_COUNT;
+
 
 class LeafNode : public Node
 {
@@ -191,40 +193,52 @@ public:
 
     void initialize_leaf_node()
     {
+        // 公共头
         set_node_type(NODE_LEAF);
         set_node_root(false);
+        // 叶子头
         *leaf_node_num_cells() = 0;
         *leaf_node_next_leaf() = 0; // 0 represents no sibling
     }
+    
+    // 叶节点头
     uint32_t *leaf_node_num_cells()
     {
         return (uint32_t *)((char *)node + LEAF_NODE_NUM_CELLS_OFFSET);
     }
+    u_int32_t *leaf_node_next_leaf()
+    {
+        return (u_int32_t *)((char *)node + LEAF_NODE_NEXT_LEAF_OFFSET);
+    }
+    
+    // 叶节点体
     void *leaf_node_cell(uint32_t cell_num)
     {
         return (char *)node + LEAF_NODE_HEADER_SIZE + cell_num * LEAF_NODE_CELL_SIZE;
     }
     uint32_t *leaf_node_key(uint32_t cell_num)
     {
+        // uint32_t 因关键词确定
         return (uint32_t *)leaf_node_cell(cell_num);
     }
     void *leaf_node_value(uint32_t cell_num)
     {
         return (char *)leaf_node_cell(cell_num) + LEAF_NODE_KEY_SIZE;
     }
+    
+    // 得到最右边的键值
     uint32_t get_node_max_key() override
     {
         return *leaf_node_key(*leaf_node_num_cells() - 1);
     }
-    u_int32_t *leaf_node_next_leaf()
-    {
-        return (u_int32_t *)((char *)node + LEAF_NODE_NEXT_LEAF_OFFSET);
-    }
+
 };
 
 /*
  * Internal Node Header Layout
  */
+// 内部节点头： 公共节点头 + 关键词数量 + 右孩子 
+//      INTERNAL_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + INTERNAL_NODE_NUM_KEYS_SIZE + INTERNAL_NODE_RIGHT_CHILD_SIZE;
 const uint32_t INTERNAL_NODE_NUM_KEYS_SIZE = sizeof(uint32_t);
 const uint32_t INTERNAL_NODE_NUM_KEYS_OFFSET = COMMON_NODE_HEADER_SIZE;
 const uint32_t INTERNAL_NODE_RIGHT_CHILD_SIZE = sizeof(uint32_t);
@@ -233,13 +247,15 @@ const uint32_t INTERNAL_NODE_RIGHT_CHILD_OFFSET =
 const uint32_t INTERNAL_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE +
                                            INTERNAL_NODE_NUM_KEYS_SIZE +
                                            INTERNAL_NODE_RIGHT_CHILD_SIZE;
+// 
 /*
  * Internal Node Body Layout
  */
+// 内部节点体： 胞元 =  孩子指针　+　关键词
+//      INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE
 const uint32_t INTERNAL_NODE_KEY_SIZE = sizeof(uint32_t);
 const uint32_t INTERNAL_NODE_CHILD_SIZE = sizeof(uint32_t);
-const uint32_t INTERNAL_NODE_CELL_SIZE =
-    INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE;
+const uint32_t INTERNAL_NODE_CELL_SIZE = INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE;
 /* Keep this small for testing */
 const uint32_t INTERNAL_NODE_MAX_CELLS = 3;
 
@@ -253,8 +269,10 @@ public:
     {
         set_node_type(NODE_INTERNAL);
         set_node_root(false);
+        
         *internal_node_num_keys() = 0;
     }
+    // 内部节点头
     uint32_t *internal_node_num_keys()
     {
         return (uint32_t *)((char *)node + INTERNAL_NODE_NUM_KEYS_OFFSET);
@@ -263,10 +281,12 @@ public:
     {
         return (u_int32_t *)((char *)node + INTERNAL_NODE_RIGHT_CHILD_OFFSET);
     }
+    // 内部节点体
     uint32_t *internal_node_cell(uint32_t cell_num)
     {
         return (uint32_t *)((char *)node + INTERNAL_NODE_HEADER_SIZE + cell_num * INTERNAL_NODE_CELL_SIZE);
     }
+    // 内节点右孩子和其他孩子分开存储
     uint32_t *internal_node_child(uint32_t child_num)
     {
         uint32_t num_keys = *internal_node_num_keys();
@@ -284,14 +304,19 @@ public:
             return internal_node_cell(child_num);
         }
     }
+    
+    
     uint32_t *internal_node_key(uint32_t key_num)
     {
+        //　关键词在后面　internal_node_cell返回类型为　uint32_t*
         return internal_node_cell(key_num) + INTERNAL_NODE_CHILD_SIZE / sizeof(uint32_t);
     }
+ 
     uint32_t get_node_max_key() override
     {
         return *internal_node_key(*internal_node_num_keys() - 1);
     }
+    
     uint32_t internal_node_find_child(uint32_t key)
     {
         /*
@@ -321,6 +346,7 @@ public:
 
         return min_index;
     }
+    //
     void update_internal_node_key(uint32_t old_key, uint32_t new_key)
     {
         uint32_t old_child_index = internal_node_find_child(old_key);
