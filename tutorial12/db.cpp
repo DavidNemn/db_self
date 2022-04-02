@@ -5,11 +5,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+// 识别元命令
 enum MetaCommandResult
 {
     META_COMMAND_SUCCESS,
     META_COMMAND_UNRECOGNIZED_COMMAND
 };
+
+// insert语句的状态
 enum PrepareResult
 {
     PREPARE_SUCCESS,
@@ -18,22 +21,30 @@ enum PrepareResult
     PREPARE_SYNTAX_ERROR,
     PREPARE_UNRECOGNIZED_STATEMENT
 };
+
+//
 enum StatementType
 {
     STATEMENT_INSERT,
     STATEMENT_SELECT
 };
+
 enum ExecuteResult
 {
     EXECUTE_SUCCESS,
     EXECUTE_TABLE_FULL,
     EXECUTE_DUPLICATE_KEY
 };
+
+// 
 enum NodeType
 {
     NODE_INTERNAL,
     NODE_LEAF
 };
+
+// ****** 一行数据的定义 ******
+// 主要定义数据大小、offset、序列化和反序列化 一行数据存储void地址 和 void地址返回一行数据
 #define COLUMN_USERNAME_SIZE 32
 #define COLUMN_EMAIL_SIZE 255
 class Row
@@ -55,9 +66,7 @@ public:
         strncpy(this->email, email, COLUMN_EMAIL_SIZE + 1);
     }
 };
-
 #define size_of_attribute(Struct, Attribute) sizeof(((Struct *)0)->Attribute)
-
 const uint32_t ID_SIZE = size_of_attribute(Row, id);
 const uint32_t USERNAME_SIZE = size_of_attribute(Row, username);
 const uint32_t EMAIL_SIZE = size_of_attribute(Row, email);
@@ -72,7 +81,6 @@ void serialize_row(Row &source, void *destination)
     strncpy((char *)destination + USERNAME_OFFSET, source.username, USERNAME_SIZE);
     strncpy((char *)destination + EMAIL_OFFSET, source.email, EMAIL_SIZE);
 }
-
 void deserialize_row(void *source, Row &destination)
 {
     memcpy(&(destination.id), (char *)source + ID_OFFSET, ID_SIZE);
@@ -80,10 +88,24 @@ void deserialize_row(void *source, Row &destination)
     strncpy(destination.email, (char *)source + EMAIL_OFFSET, EMAIL_SIZE);
 }
 
+// 一页 4K
 #define TABLE_MAX_PAGES 100
 const uint32_t PAGE_SIZE = 4096;
 
-/*
+
+// 公共节点 
+//    叶子节点 
+//    内部节点
+// 公共节点头：节点类型 + 是否根节点 + 指向其父节点的指针
+// COMMON_NODE_HEADER_SIZE = NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE
+// 叶子节点头：公共节点头 + 胞元数量
+// LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE
+// 叶节点体：胞元 = 关键词（id） + 值 （数据行）
+//      LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE
+
+
+
+/* 
  * Common Node Header Layout
  */
 const uint32_t NODE_TYPE_SIZE = sizeof(uint8_t);
@@ -92,31 +114,32 @@ const uint32_t IS_ROOT_SIZE = sizeof(uint8_t);
 const uint32_t IS_ROOT_OFFSET = NODE_TYPE_SIZE;
 const uint32_t PARENT_POINTER_SIZE = sizeof(uint32_t);
 const uint32_t PARENT_POINTER_OFFSET = IS_ROOT_OFFSET + IS_ROOT_SIZE;
-const uint8_t COMMON_NODE_HEADER_SIZE =
-    NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE;
+const uint8_t COMMON_NODE_HEADER_SIZE = NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE;
 
 class Node
 {
 protected:
     void *node;
-
 public:
     Node() {}
     Node(void *node) : node(node) {}
-
+    // 注意取值都需要转换成对应指针类型
     NodeType get_node_type()
     {
         uint8_t value = *((uint8_t *)((char *)node + NODE_TYPE_OFFSET));
         return (NodeType)value;
     }
+    
     void set_node_type(NodeType type)
     {
         *((uint8_t *)((char *)node + NODE_TYPE_OFFSET)) = (uint8_t)type;
     }
+    
     void *get_node()
     {
         return node;
     }
+    
     bool is_node_root()
     {
         uint8_t value = *((uint8_t *)((char *)node + IS_ROOT_OFFSET));
@@ -132,20 +155,21 @@ public:
     }
     virtual uint32_t get_node_max_key();
 };
+
 /*
  * Leaf Node Header Layout
  */
+
 const uint32_t LEAF_NODE_NUM_CELLS_SIZE = sizeof(uint32_t);
 const uint32_t LEAF_NODE_NUM_CELLS_OFFSET = COMMON_NODE_HEADER_SIZE;
 const uint32_t LEAF_NODE_NEXT_LEAF_SIZE = sizeof(uint32_t);
-const uint32_t LEAF_NODE_NEXT_LEAF_OFFSET =
-    LEAF_NODE_NUM_CELLS_OFFSET + LEAF_NODE_NUM_CELLS_SIZE;
-const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE +
-                                       LEAF_NODE_NUM_CELLS_SIZE +
-                                       LEAF_NODE_NEXT_LEAF_SIZE;
+const uint32_t LEAF_NODE_NEXT_LEAF_OFFSET = LEAF_NODE_NUM_CELLS_OFFSET + LEAF_NODE_NUM_CELLS_SIZE;
+const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE + LEAF_NODE_NEXT_LEAF_SIZE;
+
 /*
  * Leaf Node Body Layout
  */
+
 const uint32_t LEAF_NODE_KEY_SIZE = sizeof(uint32_t);
 const uint32_t LEAF_NODE_KEY_OFFSET = 0;
 const uint32_t LEAF_NODE_VALUE_SIZE = ROW_SIZE;
@@ -303,6 +327,7 @@ public:
         *internal_node_key(old_child_index) = new_key;
     }
 };
+
 uint32_t Node::get_node_max_key()
 {
     if (get_node_type() == NODE_LEAF)
@@ -316,6 +341,10 @@ uint32_t Node::get_node_max_key()
         return *internal_node->internal_node_key(*internal_node->internal_node_num_keys() - 1);
     }
 }
+
+
+
+
 
 class Pager
 {
