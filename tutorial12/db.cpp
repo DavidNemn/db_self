@@ -317,13 +317,14 @@ public:
         return *internal_node_key(*internal_node_num_keys() - 1);
     }
     
-    // 通过key 二分查找 是否在内部节点内
-    uint32_t internal_node_find_child(uint32_t key)
-    {
-        /*
+    /*
         Return the index of the child which should contain
         the given key.
-        */
+        就是该插入的位置
+    */
+    uint32_t internal_node_find_child(uint32_t key)
+    {
+
         uint32_t num_keys = *internal_node_num_keys();
 
         /* Binary search */
@@ -543,8 +544,10 @@ private:
 public:
     Cursor(Table *table);
     Cursor(Table *table, uint32_t page_num, uint32_t cell_num);
+    
     void *cursor_value();
     void cursor_advance();
+    
     void leaf_node_insert(uint32_t key, Row &value);
     void leaf_node_split_and_insert(uint32_t key, Row &value);
     void internal_node_insert(uint32_t key, uint32_t right_child);
@@ -567,12 +570,14 @@ public:
             // New file. Initialize page 0 as leaf node.
             LeafNode root_node = pager.get_page(0);
             root_node.initialize_leaf_node();
-            root_node.set_node_root(true);
+            root_node.set_node_root(true);// 叶子节点头有些没初始化
         }
     }
+    
     Cursor *table_find(uint32_t key);
     Cursor *internal_node_find(uint32_t key, uint32_t page_num);
     void create_new_root(uint32_t right_child_page_num);
+    
     ~Table();
 
     friend class Cursor;
@@ -585,12 +590,12 @@ Cursor::Cursor(Table *table)
     this->table = table;
     this->page_num = cursor->page_num;
     this->cell_num = cursor->cell_num;
-
     LeafNode root_node = table->pager.get_page(cursor->page_num);
     uint32_t num_cells = *root_node.leaf_node_num_cells();
-
     this->end_of_table = (num_cells == 0);
 }
+
+// 由key得到cursor指向位置
 Cursor::Cursor(Table *table, uint32_t page_num, uint32_t key)
 {
     this->table = table;
@@ -621,15 +626,16 @@ Cursor::Cursor(Table *table, uint32_t page_num, uint32_t key)
             min_index = index + 1;
         }
     }
-
     this->cell_num = min_index;
 }
+// 由 table page_num cell_num 得到指针
 void *Cursor::cursor_value()
 {
     void *page = table->pager.get_page(page_num);
-
     return LeafNode(page).leaf_node_value(cell_num);
 }
+
+// 通过判断是否到叶子节点的结尾，转向leaf_node_next_leaf
 void Cursor::cursor_advance()
 {
     LeafNode leaf_node = table->pager.get_page(page_num);
@@ -650,17 +656,18 @@ void Cursor::cursor_advance()
         }
     }
 }
+// 
 void Cursor::internal_node_insert(uint32_t parent_page_num, uint32_t child_page_num)
 {
     /*
-    Add a new child/key pair to parent that corresponds to child
+     Add a new child/key pair to parent that corresponds to child
     */
-
     InternalNode parent = table->pager.get_page(parent_page_num);
     Node child = table->pager.get_page(child_page_num);
+    // 孩子（不知道叶节点还是内部节点）的最大key 在父（内部节点中）找到相应位置插入 
     uint32_t child_max_key = child.get_node_max_key();
     uint32_t index = parent.internal_node_find_child(child_max_key);
-
+    
     uint32_t original_num_keys = *parent.internal_node_num_keys();
     *parent.internal_node_num_keys() = original_num_keys + 1;
 
@@ -676,51 +683,55 @@ void Cursor::internal_node_insert(uint32_t parent_page_num, uint32_t child_page_
     if (child_max_key > right_child.get_node_max_key())
     {
         /* Replace right child */
+        // 最新的 key child 存之前的 右孩子
         *parent.internal_node_child(original_num_keys) = right_child_page_num;
-        *parent.internal_node_key(original_num_keys) =
-            right_child.get_node_max_key();
+        *parent.internal_node_key(original_num_keys) = right_child.get_node_max_key();
         *parent.internal_node_right_child() = child_page_num;
     }
     else
     {
         /* Make room for the new cell */
+        // original_num_keys为空位置 后移
         for (uint32_t i = original_num_keys; i > index; i--)
         {
             void *destination = parent.internal_node_cell(i);
             void *source = parent.internal_node_cell(i - 1);
             memcpy(destination, source, INTERNAL_NODE_CELL_SIZE);
         }
+        
         *parent.internal_node_child(index) = child_page_num;
         *parent.internal_node_key(index) = child_max_key;
     }
 }
+
 void Cursor::leaf_node_insert(uint32_t key, Row &value)
 {
+    // cursor当前指向页是否满
     LeafNode leaf_node = table->pager.get_page(page_num);
     uint32_t num_cells = *leaf_node.leaf_node_num_cells();
-
     if (num_cells >= LEAF_NODE_MAX_CELLS)
     {
         // Node full
         leaf_node_split_and_insert(key, value);
         return;
     }
-
+    // 插入到cursor指向的cell_num位置
     if (cell_num < num_cells)
     {
         // make room for new cell
         for (uint32_t i = num_cells; i > cell_num; i--)
         {
-            memcpy(leaf_node.leaf_node_cell(i), leaf_node.leaf_node_cell(i - 1),
-                   LEAF_NODE_CELL_SIZE);
+            memcpy(leaf_node.leaf_node_cell(i), leaf_node.leaf_node_cell(i - 1),LEAF_NODE_CELL_SIZE);
         }
     }
-
     // insert new cell
     *leaf_node.leaf_node_num_cells() += 1;
+    
     *leaf_node.leaf_node_key(cell_num) = key;
     serialize_row(value, leaf_node.leaf_node_value(cell_num));
 }
+
+
 void Cursor::leaf_node_split_and_insert(uint32_t key, Row &value)
 {
     /*
@@ -793,10 +804,12 @@ void Cursor::leaf_node_split_and_insert(uint32_t key, Row &value)
         return;
     }
 }
+
 Cursor::~Cursor()
 {
     //delete table;
 }
+
 Cursor *Table::internal_node_find(uint32_t page_num, uint32_t key)
 {
     InternalNode node = pager.get_page(page_num);
