@@ -346,7 +346,7 @@ public:
 
         return min_index;
     }
-    //
+    // 二分查找找到键值序号 
     void update_internal_node_key(uint32_t old_key, uint32_t new_key)
     {
         uint32_t old_child_index = internal_node_find_child(old_key);
@@ -374,16 +374,19 @@ uint32_t Node::get_node_max_key()
 class Pager
 {
 private:
+    // 文件描述符和pages存在对应的映射关系
+    // 保存在硬盘
     int file_descriptor;
     uint32_t file_length;
-    
-    void *pages[TABLE_MAX_PAGES];
     uint32_t num_pages;
-
+    // 保存在内存
+    void *pages[TABLE_MAX_PAGES];
 public:
     Pager(const char *filename);
+    // 从内存 / 磁盘 读入 写入
     void *get_page(uint32_t page_num);
     void pager_flush(uint32_t page_num);
+    
     void print_tree(uint32_t page_num, uint32_t indentation_level);
     uint32_t get_unused_page_num();
     friend class Table;
@@ -410,12 +413,12 @@ Pager::Pager(const char *filename)
         std::cerr << "Db file is not a whole number of pages. Corrupt file." << std::endl;
         exit(EXIT_FAILURE);
     }
-
     for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++)
     {
         pages[i] = nullptr;
     }
 }
+
 void *Pager::get_page(uint32_t page_num)
 {
     if (page_num > TABLE_MAX_PAGES)
@@ -424,19 +427,17 @@ void *Pager::get_page(uint32_t page_num)
                   << TABLE_MAX_PAGES << std::endl;
         exit(EXIT_FAILURE);
     }
-
     if (pages[page_num] == nullptr)
     {
         // Cache miss. Allocate memory and load from file.
         void *page = malloc(PAGE_SIZE);
+        // num_pages是磁盘的页总数
         uint32_t num_pages = file_length / PAGE_SIZE;
-
         // We might save a partial page at the end of the file
         if (file_length % PAGE_SIZE)
         {
             num_pages += 1;
         }
-
         if (page_num <= num_pages)
         {
             lseek(file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
@@ -447,17 +448,15 @@ void *Pager::get_page(uint32_t page_num)
                 exit(EXIT_FAILURE);
             }
         }
-
         pages[page_num] = page;
-
         if (page_num >= num_pages)
         {
             this->num_pages = page_num + 1;
         }
     }
-
     return pages[page_num];
 }
+
 void Pager::pager_flush(uint32_t page_num)
 {
     if (pages[page_num] == nullptr)
@@ -467,22 +466,20 @@ void Pager::pager_flush(uint32_t page_num)
     }
 
     off_t offset = lseek(file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
-
     if (offset == -1)
     {
         std::cout << "Error seeking: " << errno << std::endl;
         exit(EXIT_FAILURE);
     }
 
-    ssize_t bytes_written =
-        write(file_descriptor, pages[page_num], PAGE_SIZE);
-
+    ssize_t bytes_written = write(file_descriptor, pages[page_num], PAGE_SIZE);
     if (bytes_written == -1)
     {
         std::cout << "Error writing: " << errno << std::endl;
         exit(EXIT_FAILURE);
     }
 }
+
 void indent(uint32_t level)
 {
     for (uint32_t i = 0; i < level; i++)
@@ -494,7 +491,6 @@ void Pager::print_tree(uint32_t page_num, uint32_t indentation_level)
 {
     Node *node = new Node(get_page(page_num));
     uint32_t num_keys, child;
-
     switch (node->get_node_type())
     {
     case (NODE_LEAF):
@@ -515,7 +511,6 @@ void Pager::print_tree(uint32_t page_num, uint32_t indentation_level)
         {
             child = *((InternalNode *)node)->internal_node_child(i);
             print_tree(child, indentation_level + 1);
-
             indent(indentation_level + 1);
             std::cout << "- key " << *((InternalNode *)node)->internal_node_key(i) << std::endl;
         }
@@ -525,6 +520,7 @@ void Pager::print_tree(uint32_t page_num, uint32_t indentation_level)
     }
     delete node;
 }
+
 /*
 Until we start recycling free pages, new pages will always
 go onto the end of the database file
@@ -534,10 +530,9 @@ uint32_t Pager::get_unused_page_num()
     return num_pages;
 }
 
-
+//**************** 操作table的游标 用于实际的插入
 
 class Table;
-
 class Cursor
 {
 private:
@@ -545,7 +540,6 @@ private:
     uint32_t page_num;
     uint32_t cell_num;
     bool end_of_table;
-
 public:
     Cursor(Table *table);
     Cursor(Table *table, uint32_t page_num, uint32_t cell_num);
@@ -555,7 +549,6 @@ public:
     void leaf_node_split_and_insert(uint32_t key, Row &value);
     void internal_node_insert(uint32_t key, uint32_t right_child);
     ~Cursor();
-
     friend class DB;
 };
 
