@@ -317,13 +317,13 @@ public:
         return *internal_node_key(*internal_node_num_keys() - 1);
     }
     
+    // 通过key 二分查找 是否在内部节点内
     uint32_t internal_node_find_child(uint32_t key)
     {
         /*
         Return the index of the child which should contain
         the given key.
         */
-
         uint32_t num_keys = *internal_node_num_keys();
 
         /* Binary search */
@@ -354,6 +354,7 @@ public:
     }
 };
 
+// 各自虚函数写好由父类调用
 uint32_t Node::get_node_max_key()
 {
     if (get_node_type() == NODE_LEAF)
@@ -369,27 +370,25 @@ uint32_t Node::get_node_max_key()
 }
 
 
-
-
-
+// *************** 实际页 
 class Pager
 {
 private:
     int file_descriptor;
     uint32_t file_length;
+    
     void *pages[TABLE_MAX_PAGES];
     uint32_t num_pages;
 
 public:
     Pager(const char *filename);
-
     void *get_page(uint32_t page_num);
     void pager_flush(uint32_t page_num);
     void print_tree(uint32_t page_num, uint32_t indentation_level);
     uint32_t get_unused_page_num();
-
     friend class Table;
 };
+
 Pager::Pager(const char *filename)
 {
     file_descriptor = open(filename,
@@ -406,7 +405,6 @@ Pager::Pager(const char *filename)
 
     file_length = lseek(file_descriptor, 0, SEEK_END);
     num_pages = file_length / PAGE_SIZE;
-
     if (file_length % PAGE_SIZE != 0)
     {
         std::cerr << "Db file is not a whole number of pages. Corrupt file." << std::endl;
@@ -535,6 +533,8 @@ uint32_t Pager::get_unused_page_num()
 {
     return num_pages;
 }
+
+
 
 class Table;
 
