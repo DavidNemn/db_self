@@ -12,7 +12,7 @@ enum MetaCommandResult
     META_COMMAND_UNRECOGNIZED_COMMAND
 };
 
-// insert语句的状态
+// insert select语句解析后的状态
 enum PrepareResult
 {
     PREPARE_SUCCESS,
@@ -22,7 +22,7 @@ enum PrepareResult
     PREPARE_UNRECOGNIZED_STATEMENT
 };
 
-//
+// 
 enum StatementType
 {
     STATEMENT_INSERT,
@@ -584,18 +584,60 @@ public:
     friend class DB;
 };
 
+
+// 递归搜索直到叶节点 
+// 根节点为叶节点直接返回
+Cursor *Table::table_find(uint32_t key)
+{
+    Node root_node = pager.get_page(root_page_num);
+    if (root_node.get_node_type() == NODE_LEAF)
+    {
+        return new Cursor(this, root_page_num, key);
+    }
+    else
+    {
+        return internal_node_find(root_page_num, key);
+    }
+}
+
+// 递归搜索 
+Cursor *Table::internal_node_find(uint32_t page_num, uint32_t key)
+{
+    // 1.page_num -> pager调用get_page -> 得到节点
+    // 2.key -> InternalNode调用internal_node_find_child -> 得到孩子索引位置
+    // 3.child_index -> internal_node_child -> 得到孩子实际的页码
+    InternalNode node = pager.get_page(page_num);
+    uint32_t child_index = node.internal_node_find_child(key);
+    uint32_t child_num = *node.internal_node_child(child_index);
+    Node child = pager.get_page(child_num);
+    switch (child.get_node_type())
+    {
+    case NODE_INTERNAL:
+        return internal_node_find(child_num, key);
+    case NODE_LEAF:
+    default:
+        return new Cursor(this, child_num, key);
+    }
+}
+
+///************
+// 查询语句光标
 Cursor::Cursor(Table *table)
 {
+    // id = 0 时的光标
     Cursor *cursor = table->table_find(0);
+    
     this->table = table;
     this->page_num = cursor->page_num;
     this->cell_num = cursor->cell_num;
+    
     LeafNode root_node = table->pager.get_page(cursor->page_num);
     uint32_t num_cells = *root_node.leaf_node_num_cells();
     this->end_of_table = (num_cells == 0);
 }
 
-// 由key得到cursor指向位置
+// insert语句光标
+// 由key的二分查找得到cursor指向位置
 Cursor::Cursor(Table *table, uint32_t page_num, uint32_t key)
 {
     this->table = table;
@@ -604,7 +646,6 @@ Cursor::Cursor(Table *table, uint32_t page_num, uint32_t key)
 
     LeafNode root_node = table->pager.get_page(page_num);
     uint32_t num_cells = *root_node.leaf_node_num_cells();
-
     // Binary search
     uint32_t min_index = 0;
     uint32_t one_past_max_index = num_cells;
@@ -628,6 +669,36 @@ Cursor::Cursor(Table *table, uint32_t page_num, uint32_t key)
     }
     this->cell_num = min_index;
 }
+
+//  将key + row 插入
+// 未满情况下插入光标指向位置
+void Cursor::leaf_node_insert(uint32_t key, Row &value)
+{
+    // cursor当前指向页是否满
+    LeafNode leaf_node = table->pager.get_page(page_num);
+    uint32_t num_cells = *leaf_node.leaf_node_num_cells();
+    if (num_cells >= LEAF_NODE_MAX_CELLS)
+    {
+        // Node full
+        leaf_node_split_and_insert(key, value);
+        return;
+    }
+    // 插入到cursor指向的cell_num位置
+    if (cell_num < num_cells)
+    {
+        // make room for new cell
+        for (uint32_t i = num_cells; i > cell_num; i--)
+        {
+            memcpy(leaf_node.leaf_node_cell(i), leaf_node.leaf_node_cell(i - 1),LEAF_NODE_CELL_SIZE);
+        }
+    }
+    // insert new cell
+    *leaf_node.leaf_node_num_cells() += 1;
+    *leaf_node.leaf_node_key(cell_num) = key;
+    serialize_row(value, leaf_node.leaf_node_value(cell_num));
+}
+
+
 // 由 table page_num cell_num 得到指针
 void *Cursor::cursor_value()
 {
@@ -705,36 +776,8 @@ void Cursor::internal_node_insert(uint32_t parent_page_num, uint32_t child_page_
     }
 }
 
-//  将key + row 插入
-// 未满情况下插入光标指向位置
-void Cursor::leaf_node_insert(uint32_t key, Row &value)
-{
-    // cursor当前指向页是否满
-    LeafNode leaf_node = table->pager.get_page(page_num);
-    uint32_t num_cells = *leaf_node.leaf_node_num_cells();
-    if (num_cells >= LEAF_NODE_MAX_CELLS)
-    {
-        // Node full
-        leaf_node_split_and_insert(key, value);
-        return;
-    }
-    // 插入到cursor指向的cell_num位置
-    if (cell_num < num_cells)
-    {
-        // make room for new cell
-        for (uint32_t i = num_cells; i > cell_num; i--)
-        {
-            memcpy(leaf_node.leaf_node_cell(i), leaf_node.leaf_node_cell(i - 1),LEAF_NODE_CELL_SIZE);
-        }
-    }
-    // insert new cell
-    *leaf_node.leaf_node_num_cells() += 1;
-    *leaf_node.leaf_node_key(cell_num) = key;
-    serialize_row(value, leaf_node.leaf_node_value(cell_num));
-}
 
 // 叶节点分裂
-//
 void Cursor::leaf_node_split_and_insert(uint32_t key, Row &value)
 {
     /*
@@ -792,7 +835,6 @@ void Cursor::leaf_node_split_and_insert(uint32_t key, Row &value)
             memcpy(destination.get_node(), old_node.leaf_node_cell(i), LEAF_NODE_CELL_SIZE);
         }
     }
-    
     /* Update cell count on both leaf nodes */
     // old的前半部分
     // new的前半部分
@@ -824,36 +866,7 @@ Cursor::~Cursor()
     //delete table;
 }
 
-Cursor *Table::internal_node_find(uint32_t page_num, uint32_t key)
-{
-    // 1.page_num -> pager调用get_page -> 得到节点
-    // 2.key -> InternalNode调用internal_node_find_child -> 得到孩子索引位置
-    // 3.child_index -> internal_node_child -> 得到孩子实际的页码
-    InternalNode node = pager.get_page(page_num);
-    uint32_t child_index = node.internal_node_find_child(key);
-    uint32_t child_num = *node.internal_node_child(child_index);
-    Node child = pager.get_page(child_num);
-    switch (child.get_node_type())
-    {
-    case NODE_INTERNAL:
-        return internal_node_find(child_num, key);
-    case NODE_LEAF:
-    default:
-        return new Cursor(this, child_num, key);
-    }
-}
-Cursor *Table::table_find(uint32_t key)
-{
-    Node root_node = pager.get_page(root_page_num);
-    if (root_node.get_node_type() == NODE_LEAF)
-    {
-        return new Cursor(this, root_page_num, key);
-    }
-    else
-    {
-        return internal_node_find(root_page_num, key);
-    }
-}
+
 // 右孩子交给这边
 void Table::create_new_root(uint32_t right_child_page_num)
 {
@@ -885,6 +898,7 @@ void Table::create_new_root(uint32_t right_child_page_num)
     *left_child.node_parent() = root_page_num;
     *right_child.node_parent() = root_page_num;
 }
+
 Table::~Table()
 {
     for (uint32_t i = 0; i < pager.num_pages; i++)
@@ -923,6 +937,7 @@ public:
     StatementType type;
     Row row_to_insert;
 };
+
 class DB
 {
 private:
@@ -933,6 +948,7 @@ public:
     {
         table = new Table(filename);
     }
+    
     void start();
     void print_prompt();
 
@@ -942,6 +958,7 @@ public:
     PrepareResult prepare_insert(std::string &input_line, Statement &statement);
     PrepareResult prepare_statement(std::string &input_line, Statement &statement);
     bool parse_statement(std::string &input_line, Statement &statement);
+    
     void execute_statement(Statement &statement);
     ExecuteResult execute_insert(Statement &statement);
     ExecuteResult execute_select(Statement &statement);
@@ -957,6 +974,7 @@ void DB::print_prompt()
     std::cout << "db > ";
 }
 
+// 元语句判断 和 执行
 bool DB::parse_meta_command(std::string &command)
 {
     if (command[0] == '.')
@@ -1004,53 +1022,7 @@ MetaCommandResult DB::do_meta_command(std::string &command)
     }
 }
 
-PrepareResult DB::prepare_insert(std::string &input_line, Statement &statement)
-{
-    statement.type = STATEMENT_INSERT;
-
-    char *insert_line = (char *)input_line.c_str();
-    char *keyword = strtok(insert_line, " ");
-    char *id_string = strtok(NULL, " ");
-    char *username = strtok(NULL, " ");
-    char *email = strtok(NULL, " ");
-
-    if (id_string == NULL || username == NULL || email == NULL)
-    {
-        return PREPARE_SYNTAX_ERROR;
-    }
-    int id = atoi(id_string);
-    if (id < 0)
-    {
-        return PREPARE_NEGATIVE_ID;
-    }
-    if (strlen(username) > COLUMN_USERNAME_SIZE)
-    {
-        return PREPARE_STRING_TOO_LONG;
-    }
-    if (strlen(email) > COLUMN_EMAIL_SIZE)
-    {
-        return PREPARE_STRING_TOO_LONG;
-    }
-    statement.row_to_insert = Row(id, username, email);
-
-    return PREPARE_SUCCESS;
-}
-PrepareResult DB::prepare_statement(std::string &input_line, Statement &statement)
-{
-    if (!input_line.compare(0, 6, "insert"))
-    {
-        return prepare_insert(input_line, statement);
-    }
-    else if (!input_line.compare(0, 6, "select"))
-    {
-        statement.type = STATEMENT_SELECT;
-        return PREPARE_SUCCESS;
-    }
-    else
-    {
-        return PREPARE_UNRECOGNIZED_STATEMENT;
-    }
-}
+// 解析状态
 bool DB::parse_statement(std::string &input_line, Statement &statement)
 {
     switch (prepare_statement(input_line, statement))
@@ -1072,44 +1044,57 @@ bool DB::parse_statement(std::string &input_line, Statement &statement)
     }
     return false;
 }
-ExecuteResult DB::execute_insert(Statement &statement)
+// 准备状态，尤其是inset语句
+PrepareResult DB::prepare_statement(std::string &input_line, Statement &statement)
 {
-    LeafNode leaf_node = table->pager.get_page(table->root_page_num);
-    uint32_t num_cells = *leaf_node.leaf_node_num_cells();
-
-    Cursor *cursor = table->table_find(statement.row_to_insert.id);
-
-    if (cursor->cell_num < num_cells)
+    if (!input_line.compare(0, 6, "insert"))
     {
-        uint32_t key_at_index = *leaf_node.leaf_node_key(cursor->cell_num);
-        if (key_at_index == statement.row_to_insert.id)
-        {
-            return EXECUTE_DUPLICATE_KEY;
-        }
+        return prepare_insert(input_line, statement);
     }
-    cursor->leaf_node_insert(statement.row_to_insert.id, statement.row_to_insert);
-
-    delete cursor;
-
-    return EXECUTE_SUCCESS;
+    else if (!input_line.compare(0, 6, "select"))
+    {
+        statement.type = STATEMENT_SELECT;
+        return PREPARE_SUCCESS;
+    }
+    else
+    {
+        return PREPARE_UNRECOGNIZED_STATEMENT;
+    }
 }
-ExecuteResult DB::execute_select(Statement &statement)
+
+// insert需要准备数据
+PrepareResult DB::prepare_insert(std::string &input_line, Statement &statement)
 {
-    // start of the table
-    Cursor *cursor = new Cursor(table);
-
-    Row row;
-    while (!cursor->end_of_table)
+    // type
+    statement.type = STATEMENT_INSERT;
+    // row
+    char *insert_line = (char *)input_line.c_str();// c_str
+    char *keyword = strtok(insert_line, " ");
+    char *id_string = strtok(NULL, " ");
+    char *username = strtok(NULL, " ");
+    char *email = strtok(NULL, " ");
+    if (id_string == NULL || username == NULL || email == NULL)
     {
-        deserialize_row(cursor->cursor_value(), row);
-        std::cout << "(" << row.id << ", " << row.username << ", " << row.email << ")" << std::endl;
-        cursor->cursor_advance();
+        return PREPARE_SYNTAX_ERROR;
     }
-
-    delete cursor;
-
-    return EXECUTE_SUCCESS;
+    int id = atoi(id_string);
+    if (id < 0)
+    {
+        return PREPARE_NEGATIVE_ID;
+    }
+    if (strlen(username) > COLUMN_USERNAME_SIZE)
+    {
+        return PREPARE_STRING_TOO_LONG;
+    }
+    if (strlen(email) > COLUMN_EMAIL_SIZE)
+    {
+        return PREPARE_STRING_TOO_LONG;
+    }
+    statement.row_to_insert = Row(id, username, email);
+    return PREPARE_SUCCESS;
 }
+
+// 根据Statement type 执行语句
 void DB::execute_statement(Statement &statement)
 {
     ExecuteResult result;
@@ -1136,29 +1121,60 @@ void DB::execute_statement(Statement &statement)
         break;
     }
 }
+// ***执行语句
+ExecuteResult DB::execute_insert(Statement &statement)
+{
+    // root_page_num得到？？
+    LeafNode leaf_node = table->pager.get_page(table->root_page_num);
+    uint32_t num_cells = *leaf_node.leaf_node_num_cells();
+    // table_find 得到光标位置
+    Cursor *cursor = table->table_find(statement.row_to_insert.id);
+    if (cursor->cell_num < num_cells)
+    {
+        uint32_t key_at_index = *leaf_node.leaf_node_key(cursor->cell_num);
+        if (key_at_index == statement.row_to_insert.id)
+        {
+            return EXECUTE_DUPLICATE_KEY;
+        }
+    }
+    // 根据cursor指向的页码插入
+    cursor->leaf_node_insert(statement.row_to_insert.id, statement.row_to_insert);
+    delete cursor;
+    return EXECUTE_SUCCESS;
+}
+ExecuteResult DB::execute_select(Statement &statement)
+{
+    // start of the table
+    Cursor *cursor = new Cursor(table);
+    Row row;
+    while (!cursor->end_of_table)
+    {
+        deserialize_row(cursor->cursor_value(), row);
+        std::cout << "(" << row.id << ", " << row.username << ", " << row.email << ")" << std::endl;
+        cursor->cursor_advance();
+    }
+    delete cursor;
+    return EXECUTE_SUCCESS;
+}
+
 
 void DB::start()
 {
     while (true)
     {
-        print_prompt();
-
-        std::string input_line;
+        print_prompt();// 1.输入行提示
+        std::string input_line;// 2.getline得到字符串语句
         std::getline(std::cin, input_line);
-
-        if (parse_meta_command(input_line))
+        if (parse_meta_command(input_line)) // 3.元语句判断和执行 true时下个循环
         {
             continue;
         }
-
         Statement statement;
-
-        if (parse_statement(input_line, statement))
+        if (parse_statement(input_line, statement))// 4.解析语句返回状态
         {
             continue;
         }
-
-        execute_statement(statement);
+        execute_statement(statement);   
     }
 }
 
@@ -1169,7 +1185,6 @@ int main(int argc, char const *argv[])
         std::cout << "Must supply a database filename." << std::endl;
         exit(EXIT_FAILURE);
     }
-
     DB db(argv[1]);
     db.start();
     return 0;
