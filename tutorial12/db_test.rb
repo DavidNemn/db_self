@@ -5,6 +5,7 @@ describe "database" do
 
   def run_script(commands)
     raw_output = nil
+    ## IO类打开 test.db 
     IO.popen("./db test.db", "r+") do |pipe|
       commands.each do |command|
         begin
@@ -52,6 +53,7 @@ describe "database" do
   end
 
   it "prints error message when table is full" do
+    # map 传给 块 |i| 然后script发生变化
     script = (1..1400).map do |i|
       "insert #{i} user#{i} person#{i}@example.com"
     end
